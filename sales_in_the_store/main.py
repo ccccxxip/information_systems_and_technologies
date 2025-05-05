@@ -260,14 +260,6 @@ class StoreApp:
         try:
             cursor = self.conn.cursor()
             
-            # Проверяем, есть ли уже товар с таким названием
-            cursor.execute("SELECT product_id FROM products WHERE product_name=?", (name,))
-            existing_product = cursor.fetchone()
-            
-            if existing_product:
-                messagebox.showerror("Ошибка", "Товар с таким названием уже существует!")
-                return
-            
             # Получаем ID категории
             cursor.execute("SELECT category_id FROM categories WHERE category_name=?", (category,))
             category_id = cursor.fetchone()[0]
@@ -302,12 +294,6 @@ class StoreApp:
         
         try:
             cursor = self.conn.cursor()
-            
-            # Проверяем, есть ли уже товар с таким названием (кроме текущего)
-            cursor.execute("SELECT product_id FROM products WHERE product_name=? AND product_id!=?", (name, product_id))
-            if cursor.fetchone():
-                messagebox.showerror("Ошибка", "Товар с таким названием уже существует!")
-                return
             
             # Получаем ID категории
             cursor.execute("SELECT category_id FROM categories WHERE category_name=?", (category,))
@@ -489,59 +475,13 @@ class StoreApp:
         available = int(product[3])
         
         # Проверяем, есть ли уже этот товар в чеке
-        existing_item = None
-        current_qty = 0
         for item in self.current_sale_tree.get_children():
             if self.current_sale_tree.item(item, "values")[0] == product_id:
-                existing_item = item
-                current_qty = int(self.current_sale_tree.item(item, "values")[3])
-                break
+                messagebox.showwarning("Внимание", "Этот товар уже есть в чеке!")
+                return
         
-        if existing_item:
-            # Товар уже есть в чеке - обновляем количество
-            self.update_existing_product_in_sale(existing_item, product_id, product_name, price, available, current_qty)
-        else:
-            # Товара нет в чеке - добавляем новый
-            self.ask_quantity_for_product(product_id, product_name, price, available)
-    
-    def update_existing_product_in_sale(self, item_id, product_id, product_name, price, available, current_qty):
-        top = tk.Toplevel(self.root)
-        top.title("Обновление количества")
-        top.resizable(False, False)
-        
-        ttk.Label(top, text=f"Товар: {product_name}\nЦена: {price:.2f} руб.\nДоступно: {available}").pack(pady=10)
-        
-        ttk.Label(top, text=f"Текущее количество: {current_qty}").pack()
-        ttk.Label(top, text="Добавить количество:").pack()
-        
-        add_qty_entry = ttk.Entry(top)
-        add_qty_entry.pack(pady=5)
-        add_qty_entry.insert(0, "1")
-        add_qty_entry.focus()
-        
-        def update_sale():
-            try:
-                add_qty = int(add_qty_entry.get())
-                if add_qty <= 0:
-                    messagebox.showerror("Ошибка", "Количество должно быть положительным!")
-                    return
-                
-                new_qty = current_qty + add_qty
-                if new_qty > available:
-                    messagebox.showerror("Ошибка", 
-                        f"Недостаточно товара! Доступно: {available}, уже в чеке: {current_qty}")
-                    return
-                
-                total = price * new_qty
-                self.current_sale_tree.item(item_id, 
-                    values=(product_id, product_name, price, new_qty, total))
-                self.update_sale_total()
-                top.destroy()
-            except ValueError:
-                messagebox.showerror("Ошибка", "Введите целое число!")
-        
-        ttk.Button(top, text="Обновить", command=update_sale).pack(pady=10)
-        top.bind("<Return>", lambda e: update_sale())
+        # Запрашиваем количество
+        self.ask_quantity_for_product(product_id, product_name, price, available)
     
     def ask_quantity_for_product(self, product_id, product_name, price, available):
         top = tk.Toplevel(self.root)
