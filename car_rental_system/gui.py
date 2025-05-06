@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from datetime import datetime, timedelta
 from database.connection import get_db_connection
+import sqlite3
 
 class CarRentalApp:
     def __init__(self, root):
@@ -825,4 +826,33 @@ class CarRentalApp:
     def generate_income_report(self):
         try:
             conn = get_db_connection()
-            cursor
+            cursor = conn.cursor()  # Получаем курсор из соединения
+
+            # SQL-запрос для получения данных о доходах (пример)
+            query = """
+                SELECT
+                    SUM(цена * количество) AS общий_доход
+                FROM Заказы;  # Замените 'Заказы' на фактическое название вашей таблицы
+            """
+            cursor.execute(query)
+            result = cursor.fetchone()  # Получаем одну строку с результатом
+
+            total_income = result[0] if result[0] else 0  # Извлекаем доход, обрабатываем NULL
+            print(f"Общий доход: {total_income}") # Выводим отчет
+
+            # Вместо return, сохраняем в переменную self.income_report
+            self.income_report = total_income # Сохраняем для дальнейшего использования
+
+            conn.commit() # Фиксируем изменения в БД
+        except sqlite3.Error as e:  # Обрабатываем возможные ошибки базы данных
+            print(f"Ошибка при работе с базой данных: {e}")
+            if conn:
+                conn.rollback()  # Откатываем транзакцию в случае ошибки
+            self.income_report = None # Указываем, что отчета нет.
+        except Exception as e: # Перехватываем другие исключения
+            print(f"Произошла ошибка: {e}")
+            self.income_report = None
+        finally:
+            if conn:
+                cursor.close()  # Закрываем курсор
+                conn.close()      # Закрываем соединение с базой данных
