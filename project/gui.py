@@ -8,17 +8,15 @@ logging.basicConfig(level=logging.DEBUG, filename='rental.log')
 
 def get_db_connection():
     try:
-        conn = mysql.connector.connect(
+        return mysql.connector.connect(
             host="localhost",
-            user="root",
-            password="1201Lena_",
+            user="root",  # или другой пользователь
+            password="1201Lena_",  # ваш пароль
             database="car_rental",
-            charset='utf8mb4',
-            collation='utf8mb4_unicode_ci'
+            auth_plugin='mysql_native_password'
         )
-        return conn
-    except mysql.connector.Error as err:
-        messagebox.showerror("Ошибка", f"Не удалось подключиться к БД: {err}")
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось подключиться: {e}")
         return None
 
 class CarRentalSystem:
@@ -134,6 +132,7 @@ class CarRentalSystem:
         
         Button(control_frame, text="Обновить", command=self.load_clients).pack(side=LEFT, padx=5)
         Button(control_frame, text="Добавить клиента", command=self.show_add_client_dialog).pack(side=LEFT, padx=5)
+        Button(control_frame, text="Удалить", command=self.delete_client, bg='#ffcccc').pack(side=LEFT, padx=5)
         
         # Загрузка данных
         self.load_clients()
@@ -198,24 +197,25 @@ class CarRentalSystem:
         self.load_rentals()
 
     def load_rentals(self):
-        """Загружает данные об арендах"""
+        """Загрузка аренд с учетом новой структуры"""
         conn = get_db_connection()
         if not conn:
             return
             
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(dictionary=True)
             cursor.execute("""
-                SELECT r.rental_id, 
-                       CONCAT(c.first_name, ' ', c.last_name),
-                       CONCAT(b.brand_name, ' ', m.model_name),
-                       DATE_FORMAT(r.start_datetime, '%Y-%m-%d %H:%i'),
-                       DATE_FORMAT(r.planned_end_datetime, '%Y-%m-%d %H:%i'),
-                       CASE 
-                           WHEN r.status = 'active' THEN 'Активна'
-                           WHEN r.status = 'completed' THEN 'Завершена'
-                           ELSE r.status
-                       END
+                SELECT 
+                    r.rental_id,
+                    CONCAT(c.first_name, ' ', c.last_name) AS client_name,
+                    CONCAT(b.brand_name, ' ', m.model_name) AS car_name,
+                    DATE_FORMAT(r.start_datetime, '%Y-%m-%d %H:%i') AS start_date,
+                    DATE_FORMAT(r.planned_end_datetime, '%Y-%m-%d %H:%i') AS end_date,
+                    CASE 
+                        WHEN r.status = 'active' THEN 'Активна'
+                        WHEN r.status = 'completed' THEN 'Завершена'
+                        ELSE r.status
+                    END AS status_text
                 FROM Rentals r
                 JOIN Clients c ON r.client_id = c.client_id
                 JOIN Cars car ON r.car_id = car.car_id
@@ -224,13 +224,20 @@ class CarRentalSystem:
                 ORDER BY r.rental_id DESC
             """)
             
-            # Очищаем таблицу
+            # Очистка таблицы
             for row in self.rentals_tree.get_children():
                 self.rentals_tree.delete(row)
-            
-            # Добавляем данные
+                
+            # Заполнение данными
             for row in cursor:
-                self.rentals_tree.insert("", END, values=row)
+                self.rentals_tree.insert("", END, values=(
+                    row['rental_id'],
+                    row['client_name'],
+                    row['car_name'],
+                    row['start_date'],
+                    row['end_date'],
+                    row['status_text']
+                ))
                 
         except mysql.connector.Error as err:
             messagebox.showerror("Ошибка", f"Ошибка загрузки аренд: {err}")
@@ -440,7 +447,7 @@ class CarRentalSystem:
             conn.close()
 
     def delete_car(self):
-        """Удаляет выбранный автомобиль"""
+        """Удаление автомобиля с проверкой зависимостей"""
         selected = self.cars_tree.selection()
         if not selected:
             messagebox.showwarning("Ошибка", "Выберите автомобиль для удаления!")
@@ -448,21 +455,45 @@ class CarRentalSystem:
             
         car_id = self.cars_tree.item(selected[0])['values'][0]
         
-        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить этот автомобиль?"):
-            return
-            
         conn = get_db_connection()
         if not conn:
             return
             
         try:
             cursor = conn.cursor()
+            
+            # Проверяем, есть ли активные аренды
+            cursor.execute("""
+                SELECT COUNT(*) FROM Rentals 
+                WHERE car_id = %s AND status = 'active'
+            """, (car_id,))
+            
+            if cursor.fetchone()[0] > 0:
+                messagebox.showerror("Ошибка", 
+                                "Нельзя удалить автомобиль с активной арендой!")
+                return
+                
+            if not messagebox.askyesno("Подтверждение", 
+                                    f"Удалить автомобиль ID {car_id}? Это также удалит все связанные записи."):
+                return
+                
+            # Удаляем связанные записи в CarConditions
+            cursor.execute("DELETE FROM CarConditions WHERE car_id = %s", (car_id,))
+            
+            # Удаляем связанные аренды
+            cursor.execute("DELETE FROM Rentals WHERE car_id = %s", (car_id,))
+            
+            # Удаляем сам автомобиль
             cursor.execute("DELETE FROM Cars WHERE car_id = %s", (car_id,))
+            
             conn.commit()
-            messagebox.showinfo("Успех", "Автомобиль удален!")
+            messagebox.showinfo("Успех", "Автомобиль и связанные данные удалены!")
             self.load_cars()
+            self.load_rentals()
+            
         except mysql.connector.Error as err:
-            messagebox.showerror("Ошибка", f"Ошибка удаления автомобиля: {err}")
+            conn.rollback()
+            messagebox.showerror("Ошибка", f"Не удалось удалить автомобиль:\n{err}")
         finally:
             conn.close()
 
@@ -675,7 +706,43 @@ class CarRentalSystem:
             print(f"Автомобиль '{self.cars[index]}' удален.")
         else:
             print("Пожалуйста, выберите автомобиль для удаления.")
-
+    
+    def delete_client(self):
+        """Удаление выбранного клиента"""
+        selected = self.clients_tree.selection()
+        if not selected:
+            messagebox.showwarning("Ошибка", "Выберите клиента для удаления!")
+            return
+            
+        client_id = self.clients_tree.item(selected[0])['values'][0]
+        
+        if not messagebox.askyesno("Подтверждение", 
+                                f"Удалить клиента ID {client_id}? Это также удалит все его аренды."):
+            return
+            
+        conn = get_db_connection()
+        if not conn:
+            return
+            
+        try:
+            cursor = conn.cursor()
+            
+            # Сначала удаляем связанные аренды
+            cursor.execute("DELETE FROM Rentals WHERE client_id = %s", (client_id,))
+            
+            # Затем удаляем клиента
+            cursor.execute("DELETE FROM Clients WHERE client_id = %s", (client_id,))
+            
+            conn.commit()
+            messagebox.showinfo("Успех", "Клиент и его аренды удалены!")
+            self.load_clients()
+            self.load_rentals()  # Обновляем список аренд
+            
+        except mysql.connector.Error as err:
+            conn.rollback()
+            messagebox.showerror("Ошибка", f"Не удалось удалить клиента:\n{err}")
+        finally:
+            conn.close()
 
     def complete_rental(self):
         """Завершает выбранную аренду"""
