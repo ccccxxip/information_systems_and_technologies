@@ -26,7 +26,7 @@ def get_db_connection():
     
     # Параметры по умолчанию
     config = {
-        'host': 'localhost',
+        'host': '192.168.0.204',
         'user': 'ccccxxip',
         'password': '1234',
         'database': 'car_rental',
