@@ -4,20 +4,89 @@ from tkinter import ttk
 from tkinter import messagebox
 from datetime import datetime, timedelta
 import logging
-logging.basicConfig(level=logging.DEBUG, filename='rental.log')
+from mysql.connector import Error
+import mysql.connector
+import configparser
+from pathlib import Path
+import time
+
+#logging.basicConfig(level=logging.DEBUG, filename='rental.log')
+
 
 def get_db_connection():
+    """
+    Универсальная функция подключения к MySQL с:
+    - Чтением конфига из файла
+    - Таймаутами подключения
+    - Проверкой минимальных требований
+    - Безопасным закрытием ресурсов
+    """
+    # Путь к конфигу (кросс-платформенный)
+    config_path = Path.home() / ".car_rental_config.ini"
+    
+    # Параметры по умолчанию
+    config = {
+        'host': 'localhost',
+        'user': 'ccccxxip',
+        'password': '1234',
+        'database': 'car_rental',
+        'port': '3306',
+        'auth_plugin': 'mysql_native_password',
+        'connect_timeout': 5,
+        'connection_retries': 3
+    }
+
     try:
-        return mysql.connector.connect(
-            host="localhost",
-            user="root",  # или другой пользователь
-            password="1201Lena_",  # ваш пароль
-            database="car_rental",
-            auth_plugin='mysql_native_password'
+        # Чтение конфига если существует
+        if config_path.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(config_path)
+            if 'database' in cfg:
+                config.update(cfg['database'])
+
+        # Попытка подключения с ретраями
+        for attempt in range(int(config['connection_retries'])):
+            try:
+                conn = mysql.connector.connect(
+                    host=config['host'],
+                    user=config['user'],
+                    password=config['password'],
+                    database=config['database'],
+                    port=int(config['port']),
+                    auth_plugin=config['auth_plugin'],
+                    connect_timeout=int(config['connect_timeout'])
+                )
+                
+                # Проверка работоспособности подключения
+                with conn.cursor() as test_cursor:
+                    test_cursor.execute("SELECT 1")
+                    if test_cursor.fetchone()[0] == 1:
+                        return conn
+                    
+            except Error as e:
+                if attempt == int(config['connection_retries']) - 1:
+                    raise  # Последняя попытка - пробрасываем исключение
+                time.sleep(1)  # Задержка между попытками
+
+    except Error as e:
+        messagebox.showerror(
+            "Ошибка БД", 
+            f"Не удалось подключиться к MySQL:\n"
+            f"Ошибка: {e}\n"
+            f"Проверьте:\n"
+            f"1. Запущен ли сервер MySQL\n"
+            f"2. Правильность логина/пароля\n"
+            f"3. Доступность хоста {config['host']}:{config['port']}"
         )
     except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удалось подключиться: {e}")
-        return None
+        messagebox.showerror(
+            "Критическая ошибка", 
+            f"Непредвиденная ошибка:\n{type(e).__name__}: {e}"
+        )
+    
+    return None
+
+
 
 class CarRentalSystem:
     def __init__(self, root):
@@ -52,7 +121,10 @@ class CarRentalSystem:
     # ===== ВКЛАДКА АВТОМОБИЛИ =====
     def init_cars_tab(self):
         # Таблица автомобилей
-        self.cars_tree = ttk.Treeview(self.cars_tab, columns=("ID", "Марка", "Модель", "Год", "Цвет", "Пробег", "Цена", "Доступен"), show="headings")
+        self.cars_tree = ttk.Treeview(self.cars_tab, columns=("ID", "Марка", "Модель",
+                                                               "Год", "Цвет", "Пробег",
+                                                                 "Цена", "Доступен"), show="headings")
+        
         
         # Настройка колонок
         columns = [
@@ -72,42 +144,47 @@ class CarRentalSystem:
         control_frame.pack(fill=X, padx=10, pady=5)
         
         Button(control_frame, text="Обновить", command=self.load_cars).pack(side=LEFT, padx=5)
-        Button(control_frame, text="Добавить авто", command=self.show_add_car_dialog).pack(side=LEFT, padx=5)
         Button(control_frame, text="Удалить", command=self.delete_car).pack(side=LEFT, padx=5)
+        Button(control_frame, text="Добавить авто", command=self.show_add_car_dialog).pack(side=LEFT, padx=5)
+        Button(control_frame, text="Добавить бренд", command=self.show_add_brand_dialog).pack(side=LEFT, padx=5)
+        Button(control_frame, text="Добавить модель", command=self.show_add_model_dialog).pack(side=LEFT, padx=5)
         
         # Загрузка данных
         self.load_cars()
 
     def load_cars(self):
-        """Загружает данные об автомобилях"""
-        conn = get_db_connection()
-        if not conn:
-            return
-            
         try:
+            conn = get_db_connection()
             cursor = conn.cursor()
+            
+            # Тестовый запрос - подсчет всех автомобилей
+            cursor.execute("SELECT COUNT(*) FROM Cars")
+            total_cars = cursor.fetchone()[0]
+            print(f"Всего автомобилей в БД: {total_cars}")  # Должно быть 9 по вашим данным
+            
+            # Основной запрос
             cursor.execute("""
-                SELECT c.car_id, b.brand_name, m.model_name, m.year, c.color, 
-                       c.mileage, c.daily_price, 
-                       CASE WHEN c.is_available THEN 'Да' ELSE 'Нет' END
+                SELECT c.car_id, b.brand_name, m.model_name, m.year, 
+                    c.color, c.mileage, c.daily_price, c.is_available
                 FROM Cars c
-                JOIN Models m ON c.model_id = m.model_id
-                JOIN Brands b ON m.brand_id = b.brand_id
-                ORDER BY c.car_id
+                LEFT JOIN Models m ON c.model_id = m.model_id
+                LEFT JOIN Brands b ON m.brand_id = b.brand_id
             """)
             
-            # Очищаем таблицу
-            for row in self.cars_tree.get_children():
-                self.cars_tree.delete(row)
+            print(f"Загружено строк: {cursor.rowcount}")  # Должно быть 9
             
-            # Добавляем данные
+            # Очистка и заполнение Treeview
+            self.cars_tree.delete(*self.cars_tree.get_children())
             for row in cursor:
+                print("Добавляем авто:", row)  # Выведет каждую строку
                 self.cars_tree.insert("", END, values=row)
                 
-        except mysql.connector.Error as err:
-            messagebox.showerror("Ошибка", f"Ошибка загрузки автомобилей: {err}")
+        except Exception as e:
+            print("Ошибка загрузки:", e)
+            messagebox.showerror("Ошибка", f"Не удалось загрузить авто: {e}")
         finally:
-            conn.close()
+            if conn.is_connected():
+                conn.close()
 
     # ===== ВКЛАДКА КЛИЕНТЫ =====
     def init_clients_tab(self):
@@ -271,6 +348,33 @@ class CarRentalSystem:
         Button(dialog, text="Добавить", command=self._add_client).grid(
             row=len(fields), columnspan=2, pady=10)
         
+    def show_add_brand_dialog(self):
+        dialog = Toplevel(self.root)
+        dialog.title("Добавить новый бренд")
+        
+        Label(dialog, text="Название бренда*:").grid(row=0, column=0, padx=10, pady=5)
+        brand_entry = Entry(dialog)
+        brand_entry.grid(row=0, column=1, padx=10, pady=5)
+        
+        Label(dialog, text="Страна:").grid(row=1, column=0, padx=10, pady=5)
+        country_entry = Entry(dialog)
+        country_entry.grid(row=1, column=1, padx=10, pady=5)
+        
+        def save_brand():
+            brand = brand_entry.get().strip()
+            country = country_entry.get().strip() or None
+            
+            if not brand:
+                messagebox.showwarning("Ошибка", "Название бренда обязательно!")
+                return
+                
+            if self.add_brand(brand, country):
+                messagebox.showinfo("Успех", "Бренд успешно добавлен!")
+                dialog.destroy()
+                self.load_cars()  # Обновить список
+        
+        Button(dialog, text="Сохранить", command=save_brand).grid(row=2, columnspan=2, pady=10)
+        
     def _add_client(self):
         """Добавление клиента с проверкой всех полей"""
         try:
@@ -362,89 +466,194 @@ class CarRentalSystem:
         )).grid(row=3, columnspan=2, pady=10)
         
     def show_add_car_dialog(self):
-        """Диалоговое окно добавления автомобиля"""
         dialog = Toplevel(self.root)
         dialog.title("Добавить автомобиль")
-        dialog.geometry("400x400")
+        dialog.geometry("600x500")
         
-        # Получаем список марок и моделей
+        # Получаем данные для выпадающих списков
         brands = self.get_brands_list()
         models = self.get_models_list()
         fuel_types = self.get_fuel_types_list()
+        parkings = self.get_parkings_list()
+
+
+        if not all([brands, models, fuel_types]):
+            messagebox.showerror("Ошибка", "Не удалось загрузить справочные данные!")
+            dialog.destroy()
+            return
         
-        # Поля формы
-        Label(dialog, text="Марка:").grid(row=0, column=0, padx=10, pady=5, sticky=W)
+        # Создаем и размещаем элементы формы
+        self.car_entries = {}
+        fields = [
+            ("Марка*", "brand", brands),
+            ("Модель*", "model", models),
+            ("Тип топлива*", "fuel_type", fuel_types),
+            ("Парковка", "parking", parkings),
+            ("Рег. номер*", "reg_number", None),
+            ("VIN-код*", "vin", None),
+            ("Цвет", "color", None),
+            ("Пробег", "mileage", None),
+            ("Цена/день*", "price", None),
+            ("Дата покупки (ГГГГ-ММ-ДД)", "purchase_date", None)
+        ]
+
+        for i, (label, field, values) in enumerate(fields):
+            Label(dialog, text=label).grid(row=i, column=0, padx=10, pady=5, sticky=W)
+            if values:
+                cb = ttk.Combobox(dialog, values=values, state="readonly")
+                cb.grid(row=i, column=1, padx=10, pady=5, sticky=EW)
+                if values: cb.current(0)
+                self.car_entries[field] = cb
+            else:
+                entry = Entry(dialog)
+                entry.grid(row=i, column=1, padx=10, pady=5, sticky=EW)
+                self.car_entries[field] = entry
+
+        # Кнопки управления (добавлены в отдельный фрейм)
+        button_frame = Frame(dialog)
+        button_frame.grid(row=len(fields)+1, columnspan=2, pady=10)
+        
+        # Основная кнопка добавления
+        Button(button_frame, text="Добавить автомобиль", 
+            command=self._add_car, bg='#4CAF50', fg='white').pack(side=LEFT, padx=5)
+        
+        # Вспомогательные кнопки
+        Button(button_frame, text="Добавить бренд", 
+            command=self.show_add_brand_dialog).pack(side=LEFT, padx=5)
+        Button(button_frame, text="Добавить модель", 
+            command=self.show_add_model_dialog).pack(side=LEFT, padx=5)
+        Button(button_frame, text="Отмена", 
+            command=dialog.destroy).pack(side=LEFT, padx=5)
+    def show_add_model_dialog(self):
+        dialog = Toplevel(self.root)
+        dialog.title("Добавить новую модель")
+        dialog.geometry("400x300")
+        
+        # Получаем список брендов
+        brands = self.get_brands_list()
+        if not brands:
+            messagebox.showerror("Ошибка", "Нет доступных брендов!")
+            dialog.destroy()
+            return
+        
+        # Элементы формы
+        Label(dialog, text="Бренд*:").grid(row=0, column=0, padx=10, pady=5, sticky=W)
         brand_combobox = ttk.Combobox(dialog, values=brands, state="readonly")
         brand_combobox.grid(row=0, column=1, padx=10, pady=5, sticky=EW)
-        if brands: brand_combobox.current(0)
+        brand_combobox.current(0)
         
-        Label(dialog, text="Модель:").grid(row=1, column=0, padx=10, pady=5, sticky=W)
-        model_combobox = ttk.Combobox(dialog, values=models, state="readonly")
-        model_combobox.grid(row=1, column=1, padx=10, pady=5, sticky=EW)
-        if models: model_combobox.current(0)
+        Label(dialog, text="Название модели*:").grid(row=1, column=0, padx=10, pady=5, sticky=W)
+        model_entry = Entry(dialog)
+        model_entry.grid(row=1, column=1, padx=10, pady=5, sticky=EW)
         
-        Label(dialog, text="Тип топлива:").grid(row=2, column=0, padx=10, pady=5, sticky=W)
-        fuel_combobox = ttk.Combobox(dialog, values=fuel_types, state="readonly")
-        fuel_combobox.grid(row=2, column=1, padx=10, pady=5, sticky=EW)
-        if fuel_types: fuel_combobox.current(0)
-        
-        Label(dialog, text="Год выпуска:").grid(row=3, column=0, padx=10, pady=5, sticky=W)
+        Label(dialog, text="Год выпуска:").grid(row=2, column=0, padx=10, pady=5, sticky=W)
         year_entry = Entry(dialog)
-        year_entry.grid(row=3, column=1, padx=10, pady=5, sticky=EW)
+        year_entry.grid(row=2, column=1, padx=10, pady=5, sticky=EW)
         
-        Label(dialog, text="Цвет:").grid(row=4, column=0, padx=10, pady=5, sticky=W)
-        color_entry = Entry(dialog)
-        color_entry.grid(row=4, column=1, padx=10, pady=5, sticky=EW)
+        Label(dialog, text="Класс автомобиля:").grid(row=3, column=0, padx=10, pady=5, sticky=W)
+        class_entry = Entry(dialog)
+        class_entry.grid(row=3, column=1, padx=10, pady=5, sticky=EW)
         
-        Label(dialog, text="Пробег:").grid(row=5, column=0, padx=10, pady=5, sticky=W)
-        mileage_entry = Entry(dialog)
-        mileage_entry.grid(row=5, column=1, padx=10, pady=5, sticky=EW)
+        def save_model():
+            try:
+                brand_id = int(brand_combobox.get().split(' - ')[0])
+                model_name = model_entry.get().strip()
+                year = year_entry.get().strip() or None
+                car_class = class_entry.get().strip() or None
+                
+                if not model_name:
+                    raise ValueError("Название модели обязательно!")
+                    
+                if year:
+                    year = int(year)
+                    if year < 1900 or year > datetime.now().year + 1:
+                        raise ValueError(f"Некорректный год (должен быть между 1900 и {datetime.now().year + 1})")
+                
+                if self.add_model(brand_id, model_name, year, car_class):
+                    messagebox.showinfo("Успех", "Модель успешно добавлена!")
+                    # Обновляем список моделей в диалоге добавления автомобиля, если он открыт
+                    for widget in self.root.winfo_children():
+                        if isinstance(widget, Toplevel) and widget.title() == "Добавить автомобиль":
+                            self.update_model_combobox(widget)
+                    dialog.destroy()
+                    
+            except ValueError as ve:
+                messagebox.showerror("Ошибка ввода", str(ve))
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Неизвестная ошибка: {str(e)}")
         
-        Label(dialog, text="Цена/день:").grid(row=6, column=0, padx=10, pady=5, sticky=W)
-        price_entry = Entry(dialog)
-        price_entry.grid(row=6, column=1, padx=10, pady=5, sticky=EW)
+        Button(dialog, text="Сохранить", command=save_model).grid(
+            row=4, columnspan=2, pady=10)
         
-        Button(dialog, text="Добавить", command=lambda: self.add_car(
-            brand_combobox.get(),
-            model_combobox.get(),
-            fuel_combobox.get(),
-            year_entry.get(),
-            color_entry.get(),
-            mileage_entry.get(),
-            price_entry.get()
-        )).grid(row=7, columnspan=2, pady=10)
+        def update_model_combobox(self, dialog):
+            """Обновляет combobox с моделями в диалоге добавления автомобиля"""
+            for widget in dialog.winfo_children():
+                if isinstance(widget, ttk.Combobox) and "Модель" in str(widget.master.winfo_children()[0].cget("text")):
+                    models = self.get_models_list()
+                    widget['values'] = models
+                    if models:
+                        widget.current(0)
+                    break
 
-    def add_car(self, brand_str, model_str, fuel_str, year, color, mileage, price):
-        """Добавляет новый автомобиль в БД"""
-        try:
-            brand_id = int(brand_str.split(' - ')[0])
-            model_id = int(model_str.split(' - ')[0])
-            fuel_id = int(fuel_str.split(' - ')[0])
-            year = int(year)
-            mileage = int(mileage)
-            price = float(price)
-        except ValueError:
-            messagebox.showerror("Ошибка", "Проверьте правильность введенных данных!")
+    def _add_car(self):
+        # Проверка данных
+        errors = self.validate_car_data()
+        if errors:
+            messagebox.showerror("Ошибка", "Обнаружены ошибки:\n- " + "\n- ".join(errors))
             return
-            
-        conn = get_db_connection()
-        if not conn:
-            return
-            
+        
         try:
+            # Получаем данные из формы
+            model_id = int(self.car_entries['model'].get().split(' - ')[0])
+            fuel_id = int(self.car_entries['fuel_type'].get().split(' - ')[0])
+            reg_number = self.car_entries['reg_number'].get().strip()
+            vin = self.car_entries['vin'].get().strip()
+            daily_price = float(self.car_entries['price'].get())
+            
+            # Необязательные поля
+            parking = self.car_entries['parking'].get()
+            parking_id = int(parking.split(' - ')[0]) if parking else None
+            color = self.car_entries['color'].get().strip() or None
+            mileage = int(self.car_entries['mileage'].get()) if self.car_entries['mileage'].get().strip() else 0
+            purchase_date = self.car_entries['purchase_date'].get().strip() or None
+            
+            # Проверка уникальности регистрационного номера и VIN
+            conn = get_db_connection()
+            if not conn:
+                return
+                
             cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Cars WHERE registration_number = %s OR vin = %s", 
+                        (reg_number, vin))
+            if cursor.fetchone()[0] > 0:
+                raise ValueError("Автомобиль с таким регистрационным номером или VIN уже существует")
+            
+            # Вставка данных
             cursor.execute("""
-                INSERT INTO Cars (model_id, fuel_id, color, mileage, daily_price, is_available)
-                VALUES (%s, %s, %s, %s, %s, TRUE)
-            """, (model_id, fuel_id, color, mileage, price))
+                INSERT INTO Cars (
+                    model_id, fuel_id, parking_id,
+                    registration_number, vin, color,
+                    mileage, purchase_date, daily_price
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                model_id, fuel_id, parking_id,
+                reg_number, vin, color,
+                mileage, purchase_date, daily_price
+            ))
             
             conn.commit()
-            messagebox.showinfo("Успех", "Автомобиль добавлен!")
+            messagebox.showinfo("Успех", "Автомобиль успешно добавлен!")
             self.load_cars()
+            
+        except ValueError as ve:
+            messagebox.showerror("Ошибка ввода", str(ve))
         except mysql.connector.Error as err:
-            messagebox.showerror("Ошибка", f"Ошибка добавления автомобиля: {err}")
+            messagebox.showerror("Ошибка БД", f"Ошибка {err.errno}: {err.msg}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Неизвестная ошибка: {str(e)}")
         finally:
-            conn.close()
+            if 'conn' in locals() and conn.is_connected():
+                conn.close()
 
     def delete_car(self):
         """Удаление автомобиля с проверкой зависимостей"""
@@ -498,37 +707,31 @@ class CarRentalSystem:
             conn.close()
 
     def get_brands_list(self):
-        """Возвращает список марок автомобилей"""
+        """Список марок для Combobox"""
         conn = get_db_connection()
         if not conn:
             return []
-            
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT brand_id, brand_name FROM Brands ORDER BY brand_name")
             return [f"{row[0]} - {row[1]}" for row in cursor]
-        except:
-            return []
         finally:
             conn.close()
 
     def get_models_list(self):
-        """Возвращает список моделей автомобилей"""
+        """Возвращает список моделей в формате 'ID - Бренд Модель (Год)'"""
         conn = get_db_connection()
         if not conn:
             return []
-            
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT m.model_id, CONCAT(b.brand_name, ' ', m.model_name)
-                FROM Models m
+                SELECT m.model_id, b.brand_name, m.model_name, m.year
+                FROM Models m 
                 JOIN Brands b ON m.brand_id = b.brand_id
                 ORDER BY b.brand_name, m.model_name
             """)
-            return [f"{row[0]} - {row[1]}" for row in cursor]
-        except:
-            return []
+            return [f"{row[0]} - {row[1]} {row[2]}" + (f" ({row[3]})" if row[3] else "") for row in cursor]
         finally:
             conn.close()
 
@@ -537,13 +740,26 @@ class CarRentalSystem:
         conn = get_db_connection()
         if not conn:
             return []
-            
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT fuel_id, fuel_name FROM FuelTypes ORDER BY fuel_name")
+            cursor.execute("SELECT fuel_id, fuel_name FROM FuelTypes")
             return [f"{row[0]} - {row[1]}" for row in cursor]
-        except:
+        except mysql.connector.Error as err:
+            messagebox.showerror("Ошибка", f"Не удалось загрузить типы топлива: {err}")
             return []
+        finally:
+            if conn.is_connected():
+                conn.close()
+    
+    def get_parkings_list(self):
+        """Список парковок"""
+        conn = get_db_connection()
+        if not conn:
+            return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT parking_id, address FROM Parkings ORDER BY address")
+            return [f"{row[0]} - {row[1]}" for row in cursor]
         finally:
             conn.close()
 
@@ -586,6 +802,25 @@ class CarRentalSystem:
         finally:
             if conn:
                 conn.close()
+    
+    def validate_car_data(self):
+        """Проверяет обязательные поля перед добавлением автомобиля"""
+        errors = []
+        
+        if not self.car_entries['model'].get():
+            errors.append("Не выбрана модель")
+        if not self.car_entries['fuel_type'].get():
+            errors.append("Не выбран тип топлива")
+        if not self.car_entries['reg_number'].get().strip():
+            errors.append("Не указан регистрационный номер")
+        if not self.car_entries['vin'].get().strip():
+            errors.append("Не указан VIN-код")
+        try:
+            float(self.car_entries['price'].get())
+        except:
+            errors.append("Некорректная цена")
+        
+        return errors
 
     def add_rental(self, client_str, car_str, days_str):
         """Оформление аренды с учётом всех проверенных данных"""
@@ -695,17 +930,102 @@ class CarRentalSystem:
         finally:
             if 'conn' in locals() and conn.is_connected():
                 conn.close()
+                
+    def add_brand(self, brand_name, country=None):
+        conn = get_db_connection()
+        if not conn:
+            return None
+            
+        try:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO Brands (brand_name, country) VALUES (%s, %s)", 
+                        (brand_name, country))
+            conn.commit()
+            return cursor.lastrowid
+        except mysql.connector.Error as err:
+            messagebox.showerror("Ошибка", f"Не удалось добавить бренд: {err}")
+            return None
+        finally:
+            conn.close()
+    
+    def add_model(self, brand_id, model_name, year=None, car_class=None):
+        conn = get_db_connection()
+        if not conn:
+            return None
+            
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO Models (brand_id, model_name, year, car_class)
+                VALUES (%s, %s, %s, %s)
+            """, (brand_id, model_name, year, car_class))
+            conn.commit()
+            return cursor.lastrowid
+        except mysql.connector.Error as err:
+            messagebox.showerror("Ошибка", f"Не удалось добавить модель: {err}")
+            return None
+        finally:
+            conn.close()
                     
     def delete_car(self):
-        selected_index = self.car_listbox.curselection()  # Получаем индекс выбранного автомобиля
-        if selected_index:
-            # Удаляем автомобиль из списка и из Listbox
-            index = selected_index[0]
-            self.car_listbox.delete(index)  # Удаляем из интерфейса
-            del self.cars[index]  # Удаляем из внутреннего списка
-            print(f"Автомобиль '{self.cars[index]}' удален.")
-        else:
-            print("Пожалуйста, выберите автомобиль для удаления.")
+        """Удаление выбранного автомобиля из базы данных"""
+        # Получаем выделенный элемент в Treeview
+        selected_item = self.cars_tree.selection()
+        
+        if not selected_item:
+            messagebox.showwarning("Ошибка", "Выберите автомобиль для удаления!")
+            return
+        
+        # Получаем ID автомобиля из первого столбца выделенной строки
+        car_id = self.cars_tree.item(selected_item[0])['values'][0]
+        
+        # Подтверждение удаления
+        if not messagebox.askyesno("Подтверждение", 
+                                f"Вы точно хотите удалить автомобиль ID {car_id}?\nЭто действие нельзя отменить!"):
+            return
+        
+        conn = get_db_connection()
+        if not conn:
+            return
+        
+        try:
+            cursor = conn.cursor()
+            
+            # 1. Проверяем активные аренды этого автомобиля
+            cursor.execute("""
+                SELECT COUNT(*) FROM Rentals 
+                WHERE car_id = %s AND status = 'active'
+            """, (car_id,))
+            
+            active_rentals = cursor.fetchone()[0]
+            if active_rentals > 0:
+                messagebox.showerror("Ошибка", 
+                                f"Нельзя удалить автомобиль!\nНайдено {active_rentals} активных аренд.")
+                return
+            
+            # 2. Удаляем связанные записи (в правильном порядке)
+            # Сначала условия автомобиля
+            cursor.execute("DELETE FROM CarConditions WHERE car_id = %s", (car_id,))
+            
+            # Затем аренды этого автомобиля
+            cursor.execute("DELETE FROM Rentals WHERE car_id = %s", (car_id,))
+            
+            # И наконец сам автомобиль
+            cursor.execute("DELETE FROM Cars WHERE car_id = %s", (car_id,))
+            
+            conn.commit()
+            messagebox.showinfo("Успех", "Автомобиль и связанные данные успешно удалены!")
+            
+            # Обновляем отображение
+            self.load_cars()
+            self.load_rentals()
+            
+        except mysql.connector.Error as err:
+            conn.rollback()
+            messagebox.showerror("Ошибка БД", f"Ошибка при удалении:\n{err}")
+        finally:
+            if conn.is_connected():
+                conn.close()
     
     def delete_client(self):
         """Удаление выбранного клиента"""
