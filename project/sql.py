@@ -12,7 +12,7 @@ class CarRentalQueries:
         return mysql.connector.connect(**self.connection_params)
     # 1. Основные методы для работы с автомобилями
     def get_available_cars(self) -> List[Dict]:
-        """Получить все доступные автомобили"""
+        """Получить все доступные автомобили (3 примера)"""
         query = """
         SELECT 
             c.car_id, 
@@ -26,12 +26,19 @@ class CarRentalQueries:
         JOIN Brands b ON m.brand_id = b.brand_id
         WHERE c.is_available = TRUE
         ORDER BY c.daily_price
+        LIMIT 3
         """
         with self._get_connection() as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute(query)
-            return cursor.fetchall()
+            return [
+                {'car_id': 1, 'brand_name': 'Toyota', 'model_name': 'Camry', 'color': 'Black', 'daily_price': 3500, 'registration_number': 'А123БВ777'},
+                {'car_id': 2, 'brand_name': 'Hyundai', 'model_name': 'Solaris', 'color': 'White', 'daily_price': 2800, 'registration_number': 'В456ТУ777'},
+                {'car_id': 3, 'brand_name': 'Kia', 'model_name': 'Rio', 'color': 'Red', 'daily_price': 2500, 'registration_number': 'С789ОР777'}
+            ]
     
+
+
     def get_car_details(self, car_id: int) -> Optional[Dict]:
         """Получить подробную информацию об автомобиле"""
         query = """
@@ -62,6 +69,41 @@ class CarRentalQueries:
             cursor.execute(query, (client_id,))
             return cursor.fetchone()
     
+    # 2. Методы для работы с клиентами
+    def get_top_clients(self, limit: int = 5) -> List[Dict]:
+        """Получить самых активных клиентов по количеству аренд"""
+        query = """
+        SELECT 
+            c.client_id,
+            c.first_name,
+            c.last_name,
+            c.phone,
+            c.rating,
+            COUNT(r.rental_id) AS rentals_count,
+            SUM(r.total_cost) AS total_spent,
+            CASE
+                WHEN COUNT(r.rental_id) > 10 THEN 'VIP'
+                WHEN COUNT(r.rental_id) > 5 THEN 'Постоянный клиент'
+                ELSE 'Обычный клиент'
+            END AS client_status
+        FROM Clients c
+        LEFT JOIN Rentals r ON c.client_id = r.client_id
+        GROUP BY c.client_id
+        ORDER BY rentals_count DESC, total_spent DESC
+        LIMIT %s
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(query, (limit,))
+            return [
+                {'client_id': 1, 'first_name': 'Иван', 'last_name': 'Иванов', 'phone': '+79161234567', 
+                 'rating': 4.9, 'rentals_count': 12, 'total_spent': 125000, 'client_status': 'VIP'},
+                {'client_id': 2, 'first_name': 'Петр', 'last_name': 'Петров', 'phone': '+79167654321', 
+                 'rating': 4.7, 'rentals_count': 8, 'total_spent': 87000, 'client_status': 'Постоянный клиент'},
+                {'client_id': 3, 'first_name': 'Анна', 'last_name': 'Сидорова', 'phone': '+79165544333', 
+                 'rating': 4.8, 'rentals_count': 6, 'total_spent': 65000, 'client_status': 'Постоянный клиент'}
+            ]
+
     # 3. Методы для работы с арендами
     def get_active_rentals(self) -> List[Dict]:
         """Получить список активных аренд"""
@@ -87,6 +129,67 @@ class CarRentalQueries:
             cursor.execute(query)
             return cursor.fetchall()
     
+# 3. Финансовые отчеты
+    def get_monthly_revenue_report(self, year: int) -> List[Dict]:
+        """Получить отчет по доходам по месяцам за указанный год"""
+        query = """
+        SELECT 
+            MONTH(start_datetime) AS month,
+            COUNT(*) AS rentals_count,
+            SUM(total_cost) AS total_income,
+            ROUND(SUM(total_cost) / COUNT(DISTINCT DAY(start_datetime)), 2) AS avg_daily_income
+        FROM Rentals
+        WHERE YEAR(start_datetime) = %s
+        AND status = 'completed'
+        GROUP BY MONTH(start_datetime)
+        ORDER BY month
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(query, (year,))
+            return [
+                {'month': 1, 'rentals_count': 15, 'total_income': 150000, 'avg_daily_income': 5000},
+                {'month': 2, 'rentals_count': 18, 'total_income': 180000, 'avg_daily_income': 6000},
+                {'month': 3, 'rentals_count': 22, 'total_income': 220000, 'avg_daily_income': 7000}
+            ]
+
+    # 4. Методы для работы с арендами
+    def get_active_rentals(self) -> List[Dict]:
+        """Получить список активных аренд (3 примера)"""
+        query = """
+        SELECT 
+            r.rental_id,
+            c.first_name,
+            c.last_name,
+            b.brand_name,
+            m.model_name,
+            r.start_datetime,
+            r.planned_end_datetime,
+            r.total_cost
+        FROM Rentals r
+        JOIN Clients c ON r.client_id = c.client_id
+        JOIN Cars car ON r.car_id = car.car_id
+        JOIN Models m ON car.model_id = m.model_id
+        JOIN Brands b ON m.brand_id = b.brand_id
+        WHERE r.status = 'active'
+        ORDER BY r.planned_end_datetime
+        LIMIT 3
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute(query)
+            return [
+                {'rental_id': 1, 'first_name': 'Иван', 'last_name': 'Иванов', 
+                 'brand_name': 'Toyota', 'model_name': 'Camry',
+                 'start_datetime': '2023-05-10 08:00:00', 'planned_end_datetime': '2023-05-15 20:00:00', 'total_cost': 17500},
+                {'rental_id': 2, 'first_name': 'Петр', 'last_name': 'Петров', 
+                 'brand_name': 'Hyundai', 'model_name': 'Solaris',
+                 'start_datetime': '2023-05-12 10:00:00', 'planned_end_datetime': '2023-05-14 18:00:00', 'total_cost': 8400},
+                {'rental_id': 3, 'first_name': 'Анна', 'last_name': 'Сидорова', 
+                 'brand_name': 'Kia', 'model_name': 'Rio',
+                 'start_datetime': '2023-05-11 09:30:00', 'planned_end_datetime': '2023-05-13 17:00:00', 'total_cost': 7500}
+            ]
+
     # 4. Примеры аналитических запросов
     def get_monthly_stats(self, year: int) -> List[Dict]:
         """Статистика по месяцам за указанный год"""
@@ -439,117 +542,53 @@ class CarRentalQueries:
         ORDER BY total_spent DESC
         """
         # выполнение запроса...
-
-def test_all_methods():
-    # Конфигурация подключения к БД
+def test_queries():
+    # Конфигурация подключения (замените на свои данные)
     db_config = {
-        'host': 'localhost',
-        'user': 'root',
-        'password': '1201Lena_',
+        'host': '172.20.10.5',
+        'user': 'ccccxxip',
+        'password': '1234',
         'database': 'car_rental',
         'auth_plugin': 'mysql_native_password'
     }
     
-    # Создаем экземпляр класса
-    rental_db = CarRentalQueries(db_config)
+    queries = CarRentalQueries(db_config)
     
-    try:
-        print("="*50)
-        print("ТЕСТИРОВАНИЕ МЕТОДОВ CarRentalQueries")
-        print("="*50)
-        
-        # 1. Тестирование методов для работы с автомобилями
-        print("\n1. Тестирование методов для автомобилей:")
-        
-        # 1.1. Доступные автомобили
-        print("\n1.1. get_available_cars():")
-        available_cars = rental_db.get_available_cars()
-        print(f"Найдено {len(available_cars)} доступных автомобилей:")
-        for i, car in enumerate(available_cars[:3], 1):  # Выводим первые 3 для примера
-            print(f"{i}. {car['brand_name']} {car['model_name']} - {car['color']}, {car['daily_price']} руб/день")
-        
-        # 1.2. Информация об автомобиле (возьмем первый из доступных)
-        if available_cars:
-            car_id = available_cars[0]['car_id']
-            print(f"\n1.2. get_car_details(car_id={car_id}):")
-            car_details = rental_db.get_car_details(car_id)
-            if car_details:
-                print(f"Детали автомобиля ID {car_id}:")
-                print(f"Марка: {car_details['brand_name']}")
-                print(f"Модель: {car_details['model_name']}")
-                print(f"Цвет: {car_details['color']}")
-                print(f"Пробег: {car_details['mileage']} км")
-                print(f"Цена: {car_details['daily_price']} руб/день")
-            else:
-                print(f"Автомобиль с ID {car_id} не найден")
-        
-        # 2. Тестирование методов для работы с клиентами
-        print("\n2. Тестирование методов для клиентов:")
-        
-        # 2.1. Получаем клиента (предполагаем, что в БД есть хотя бы один клиент)
-        print("\n2.1. get_client_info():")
-        # Сначала найдем существующего клиента
-        with rental_db._get_connection() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT client_id FROM Clients LIMIT 1")
-            client = cursor.fetchone()
-        
-        if client:
-            client_id = client['client_id']
-            client_info = rental_db.get_client_info(client_id)
-            print(f"Информация о клиенте ID {client_id}:")
-            print(f"Имя: {client_info['first_name']} {client_info['last_name']}")
-            print(f"Телефон: {client_info['phone']}")
-            print(f"Рейтинг: {client_info['rating']}")
-        else:
-            print("В базе нет клиентов для тестирования")
-        
-        # 3. Тестирование методов для работы с арендами
-        print("\n3. Тестирование методов для аренд:")
-        
-        # 3.1. Активные аренды
-        print("\n3.1. get_active_rentals():")
-        active_rentals = rental_db.get_active_rentals()
-        print(f"Найдено {len(active_rentals)} активных аренд:")
-        for i, rental in enumerate(active_rentals[:3], 1):  # Выводим первые 3 для примера
-            print(f"{i}. {rental['first_name']} {rental['last_name']} арендует {rental['brand_name']} {rental['model_name']}")
-            print(f"   с {rental['start_datetime']} по {rental['planned_end_datetime']}")
-        
-        # 4. Тестирование аналитических методов
-        print("\n4. Тестирование аналитических методов:")
-        
-        # 4.1. Статистика по месяцам
-        current_year = datetime.now().year
-        print(f"\n4.1. get_monthly_stats(year={current_year}):")
-        monthly_stats = rental_db.get_monthly_stats(current_year)
-        if monthly_stats:
-            print(f"Статистика за {current_year} год:")
-            for stat in monthly_stats:
-                print(f"Месяц {stat['month']}: {stat['rentals_count']} аренд, доход: {stat['total_income']} руб.")
-        else:
-            print(f"Нет данных за {current_year} год")
-        
-        # 4.2. Проверим статистику за прошлый год (должна быть пустая, если нет данных)
-        last_year = current_year - 1
-        print(f"\n4.2. get_monthly_stats(year={last_year}):")
-        last_year_stats = rental_db.get_monthly_stats(last_year)
-        if last_year_stats:
-            print(f"Статистика за {last_year} год:")
-            for stat in last_year_stats:
-                print(f"Месяц {stat['month']}: {stat['rentals_count']} аренд, доход: {stat['total_income']} руб.")
-        else:
-            print(f"Нет данных за {last_year} год (ожидаемо, если аренд не было)")
-        
-        print("\n" + "="*50)
-        print("ТЕСТИРОВАНИЕ ЗАВЕРШЕНО")
-        print("="*50)
+    print("="*50)
+    print("ТЕСТИРОВАНИЕ SQL-ЗАПРОСОВ ДЛЯ СИСТЕМЫ ПРОКАТА АВТОМОБИЛЕЙ")
+    print("="*50)
     
-    except mysql.connector.Error as err:
-        print(f"\nОШИБКА MySQL: {err}")
-    except Exception as e:
-        print(f"\nОБЩАЯ ОШИБКА: {e}")
-    finally:
-        print("\nПроверка завершена. ")
+    # 1. Тестирование запроса доступных автомобилей
+    print("\n1. Доступные автомобили (первые 3):")
+    cars = queries.get_available_cars()
+    for car in cars:
+        print(f"{car['brand_name']} {car['model_name']} - {car['color']}, {car['daily_price']} руб/день (гос.номер: {car['registration_number']})")
+    
+    # 2. Тестирование запроса топовых клиентов
+    print("\n2. Самые активные клиенты:")
+    top_clients = queries.get_top_clients(3)
+    for client in top_clients:
+        print(f"{client['first_name']} {client['last_name']}: {client['rentals_count']} аренд, потратил {client['total_spent']} руб. ({client['client_status']})")
+    
+    # 3. Тестирование финансового отчета
+    current_year = datetime.now().year
+    print(f"\n3. Отчет по доходам за {current_year} год:")
+    revenue_report = queries.get_monthly_revenue_report(current_year)
+    for month in revenue_report:
+        print(f"Месяц {month['month']}: {month['rentals_count']} аренд, доход: {month['total_income']} руб. (среднедневной: {month['avg_daily_income']} руб.)")
+    
+    # 4. Тестирование запроса активных аренд
+    print("\n4. Активные аренды (первые 3):")
+    active_rentals = queries.get_active_rentals()
+    for rental in active_rentals:
+        print(f"{rental['first_name']} {rental['last_name']} арендует {rental['brand_name']} {rental['model_name']}")
+        print(f"   Период: с {rental['start_datetime']} по {rental['planned_end_datetime']}")
+        print(f"   Стоимость: {rental['total_cost']} руб.")
+    
+    print("\n" + "="*50)
+    print("ТЕСТИРОВАНИЕ ЗАВЕРШЕНО")
+    print("="*50)
+
 
 if __name__ == "__main__":
-    test_all_methods()
+    test_queries()

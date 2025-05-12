@@ -14,6 +14,7 @@ import time
 
 
 def get_db_connection():
+    
     """
     Универсальная функция подключения к MySQL с:
     - Чтением конфига из файла
@@ -26,7 +27,7 @@ def get_db_connection():
     
     # Параметры по умолчанию
     config = {
-        'host': '192.168.0.204',
+        'host': '172.20.10.5',
         'user': 'ccccxxip',
         'password': '1234',
         'database': 'car_rental',
